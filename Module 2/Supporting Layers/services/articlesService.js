@@ -1,32 +1,16 @@
 /**
- * Articles service — STARTER.
- *
- * PROBLEMS:
- *   - AppError is DEFINED here (and again in middleware/errorHandler.js). It should
- *     live once in utils/AppError.js and be imported in both places.
- *   - process.env.MAX_ARTICLES is read directly here. It should move into
- *     config/index.js and be imported as config.maxArticles.
+ * Articles business rules.
  */
 
 const repo = require('./../repository/articlesRepo');
-
-// DUPLICATED definition — should move to utils/AppError.js
-class AppError extends Error {
-  constructor(message, statusCode) {
-    super(message);
-    this.statusCode = statusCode;
-    this.isOperational = true;
-  }
-}
-
-// INLINE process.env read — should move to config/index.js (config.maxArticles)
-const MAX_ARTICLES = parseInt(process.env.MAX_ARTICLES) || 50;
+const AppError = require('./../utils/AppError');
+const config = require('./../config');
 
 exports.getAll = async () => repo.findAll();
 
 exports.create = async ({ title, body }) => {
   const count = await repo.count();
-  if (count >= MAX_ARTICLES) {
+  if (count >= config.maxArticles) {
     throw new AppError('Article limit reached', 403);
   }
   return repo.insert({ title, body });
