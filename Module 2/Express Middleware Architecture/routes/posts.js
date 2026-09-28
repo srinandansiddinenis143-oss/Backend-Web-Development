@@ -11,7 +11,7 @@
 const express = require('express');
 const router = express.Router();
 
-// const auditWrite = require('../middleware/auditWrite');
+const auditWrite = require('../middleware/auditWrite');
 
 const posts = [{ id: 1, title: 'Hello World' }];
 
@@ -22,7 +22,7 @@ router.get('/', (req, res) => {
 
 // TODO: add `auditWrite` as PER-ROUTE middleware on this POST route only, e.g.:
 //   router.post('/', auditWrite, (req, res) => { ... });
-router.post('/', (req, res) => {
+router.post('/', auditWrite,(req, res) => {
   const post = { id: posts.length + 1, title: req.body.title || 'Untitled' };
   posts.push(post);
   res.status(201).json({ data: post });
