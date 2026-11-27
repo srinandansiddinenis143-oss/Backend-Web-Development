@@ -1,26 +1,69 @@
 'use strict';
 // middleware/rateLimiter.js
 //
-// YOUR TASK: replace this pass-through with a real rate limiter.
+// Strict limiter for the auth routes: 5 failed attempts per IP per 15 minutes.
+// Successful logins do NOT count against the quota, so a legitimate user who
+// logs in repeatedly is never locked out.
 //
-// Right now this middleware lets EVERY request through, so the login route can be
-// brute-forced without limit. Build a strict limiter with `express-rate-limit`
-// (already in package.json) that is exported as the middleware used by the three
-// auth routes in src/routes/auth.js.
+// ---------------------------------------------------------------------------
+// PRODUCTION NOTE — why the default in-memory store is not enough
+// ---------------------------------------------------------------------------
+// express-rate-limit's default store keeps counters in the process's own
+// memory. That works for a single instance, but as soon as you run more than
+// one instance behind a load balancer (horizontal scaling, Kubernetes, etc.)
+// the counters are partitioned per process:
 //
-// Requirements (checked by the tests):
-//   - windowMs: 15 minutes
-//   - max: 5 attempts per window per IP
-//   - after the limit, respond with 429 and a `Retry-After` header
-//   - standardHeaders: true, legacyHeaders: false
-//   - (recommended) skipSuccessfulRequests: true so only FAILED attempts count
+//   - Request 1 -> instance A  (A's counter: 1)
+//   - Request 2 -> instance B  (B's counter: 1)
+//   - Request 3 -> instance A  (A's counter: 2)
+//   - ...
 //
-// Also add a COMMENT explaining how a Redis-backed store (rate-limit-redis) would
-// replace the default in-memory store in a multi-instance deployment, and why the
-// in-memory store is not enough when several instances run behind a load balancer.
+// The effective limit becomes `max x N` (N = number of instances), so an
+// attacker can spread requests across instances and effectively bypass the
+// limit. A process restart also wipes the counters, resetting the window early.
 //
-// Hint: express-rate-limit returns a middleware function — export it directly:
-//   const rateLimit = require('express-rate-limit');
-//   module.exports = rateLimit({ ...options });
+// The fix is a SHARED store — typically Redis — so every instance reads and
+// writes the same counter atomically. With `rate-limit-redis`:
+//
+//   const { RedisStore } = require('rate-limit-redis');
+//   const { createClient } = require('redis');
+//
+//   const redisClient = createClient({ url: process.env.REDIS_URL });
+//   await redisClient.connect();
+//
+//   const limiter = rateLimit({
+//     windowMs: 15 * 60 * 1000,
+//     max: 5,
+//     standardHeaders: true,
+//     legacyHeaders: false,
+//     skipSuccessfulRequests: true,
+//     store: new RedisStore({
+//       sendCommand: (...args) => redisClient.sendCommand(args),
+//       prefix: 'rl:auth:',          // namespace so keys don't collide
+//     }),
+//   });
+//
+// Redis gives us: (a) one counter shared by all instances, (b) INCR + EXPIRE
+// as atomic ops (no race between concurrent requests), (c) TTL-based expiry so
+// keys don't leak, and (d) survival across process restarts.
+// ---------------------------------------------------------------------------
 
-module.exports = (req, res, next) => next(); // TODO: replace this stub
+const rateLimit = require('express-rate-limit');
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,       // 15 minutes
+  max: 5,                          // 5 failed attempts per IP per window
+  standardHeaders: true,           // emit RateLimit-* headers
+  legacyHeaders: false,            // disable X-RateLimit-* headers
+  skipSuccessfulRequests: true,    // only FAILED attempts count toward the quota
+  handler: (req, res, next, options) => {
+    res.status(options.statusCode).json({
+      error: {
+        code: 'TOO_MANY_REQUESTS',
+        message: 'Too many login attempts. Please try again later.',
+      },
+    });
+  },
+});
+
+module.exports = authLimiter;
