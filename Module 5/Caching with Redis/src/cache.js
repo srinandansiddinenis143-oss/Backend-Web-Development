@@ -1,44 +1,62 @@
 'use strict';
 
 // ─── YOUR FILE — implement this ───────────────────────────────────────────────
-// Implement three Redis helper functions using ioredis.
-//
-// cacheGet(key)
-//   - redis.get(key) → string | null
-//   - If string: JSON.parse and return the object
-//   - If null: return null (cache miss)
-//   - Wrap in try/catch: on error, log and return null (graceful degradation)
-//
-// cacheSet(key, data, ttlSeconds)
-//   - redis.set(key, JSON.stringify(data), 'EX', ttlSeconds)
-//   - Wrap in try/catch: on error, log (don't fail the request)
-//
-// cacheDel(key)
-//   - redis.del(key)
-//   - Wrap in try/catch: on error, log
-//
-// Redis connection:
-//   host: process.env.REDIS_HOST || 'localhost'
-//   port: parseInt(process.env.REDIS_PORT || '6379')
-//   lazyConnect: true
+// Three Redis helper functions using ioredis.
 
 const Redis = require('ioredis');
 
-// TODO: create Redis instance
+// Create the Redis client once. lazyConnect defers the socket open until the
+// first command, so importing this module never blocks on an unavailable Redis.
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  lazyConnect: true,
+});
 
-// TODO: implement cacheGet
+// ioredis emits 'error' events; without a listener Node may treat them as
+// unhandled and crash the process when Redis is down.
+redis.on('error', (err) => {
+  console.error('[cache] redis error:', err.message);
+});
+
+// cacheGet(key)
+//   - redis.get(key) → string | null
+//   - string → JSON.parse and return the object
+//   - null   → return null (cache miss)
+//   - error  → log and return null (graceful degradation)
 async function cacheGet(key) {
-  throw new Error('not implemented');
+  try {
+    const raw = await redis.get(key);
+    if (raw === null || raw === undefined) {
+      return null;
+    }
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error(`[cache] GET ${key} failed:`, err.message);
+    return null;
+  }
 }
 
-// TODO: implement cacheSet
+// cacheSet(key, data, ttlSeconds)
+//   - redis.set(key, JSON.stringify(data), 'EX', ttlSeconds)
+//   - error → log only (never fail the request because a cache write failed)
 async function cacheSet(key, data, ttlSeconds) {
-  throw new Error('not implemented');
+  try {
+    await redis.set(key, JSON.stringify(data), 'EX', ttlSeconds);
+  } catch (err) {
+    console.error(`[cache] SET ${key} failed:`, err.message);
+  }
 }
 
-// TODO: implement cacheDel
+// cacheDel(key)
+//   - redis.del(key)
+//   - error → log only
 async function cacheDel(key) {
-  throw new Error('not implemented');
+  try {
+    await redis.del(key);
+  } catch (err) {
+    console.error(`[cache] DEL ${key} failed:`, err.message);
+  }
 }
 
 module.exports = { cacheGet, cacheSet, cacheDel };
